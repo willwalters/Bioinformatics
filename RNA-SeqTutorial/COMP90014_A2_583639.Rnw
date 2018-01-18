@@ -1,0 +1,544 @@
+\documentclass{article}
+\usepackage{outline}
+\usepackage{pmgraph}
+\usepackage[normalem]{ulem}
+\title{\textbf{RNA-Seq Analysis}}
+\date{}
+\author{}
+
+%--------------------Make usable space all of page
+\setlength{\oddsidemargin}{0in}
+\setlength{\evensidemargin}{0in}
+\setlength{\topmargin}{0in}
+\setlength{\headsep}{-.25in}
+\setlength{\textwidth}{6.5in}
+\setlength{\textheight}{8.5in}
+%--------------------Indention
+\setlength{\parindent}{0.cm}
+
+\usepackage{Sweave}
+\begin{document}
+\begin{titlepage}
+\vspace*{-1cm}
+	\begin{center}
+	<<echo=FALSE, out.width='8cm'>>=
+	knitr::include_graphics('designcover.jpeg')
+
+	@
+	%\includegraphics[scale=0.90]{designcover.jpeg}
+	\end{center}
+	\vspace*{-1.25cm}
+    \centering
+    \vspace*{\baselineskip}
+    \rule{\textwidth}{1.6pt}\vspace*{-\baselineskip}\vspace*{2.25pt}
+    \rule{\textwidth}{0.4pt}\\[\baselineskip]
+    {\Huge RNA-Seq Analysis}\\[0.2\baselineskip]
+    \rule{\textwidth}{0.4pt}\vspace*{-\baselineskip}\vspace{4pt}
+    \rule{\textwidth}{1.6pt}\\[\baselineskip]
+    \scshape
+    \LARGE \par
+    \vspace*{2\baselineskip}
+    \vspace*{11cm}
+    \Large William Walters \\
+   
+  \end{titlepage}
+
+\maketitle
+
+\section*{Task 1: DGE Analysis on Original Dataset}
+The following R code performs Differential Gene Expression (DGE) analysis on the full dataset.
+<<eval=FALSE>>=
+devtools::install_github('NMF', 'renozao', 'devel')
+@
+
+<<fig.align='center', out.width='9.25cm'>>=
+# Task 1:
+
+suppressMessages(library(edgeR))
+suppressMessages(library(xtable))
+suppressMessages(library(NMF))
+
+# Load the count data and check size
+fullCountData = read.table("fullcounts.tsv", header=TRUE, sep="\t")
+dim(fullCountData)
+
+# remove genes with very low count profiles
+lowCounts = apply(fullCountData[,1:15], 1, median)==0 & 
+  apply(fullCountData[,16:30], 1 ,median)==0
+countsFiltered = fullCountData[!lowCounts,]
+
+# sanity check the filtering worked
+dim(countsFiltered)[1] < dim(fullCountData)[1]
+dim(countsFiltered)
+
+# separate count data from extra data
+expressionData = countsFiltered[,1:30]
+geneInfo = countsFiltered[,31:34]
+
+# Tell edgeR about Male and Female groups
+isMale = c( rep(0,15), rep(1,15) )
+# prepare data for edgeR to use, comparison between males and females
+dge = DGEList(expressionData, group=isMale)
+# perform TMM (trimmed mean) normalisation
+# assumption that most genes are not differentially expressed
+dge = calcNormFactors(dge)
+
+cols = c(rep("red",15), rep("blue",15))
+plotMDS(dge, col=cols, main = "MDS plot of full lymphoblastoid cell data")
+@
+\begin{center}
+Figure 1 MDS Plot on the full lymphoblastoid cell dataset. 
+\end{center}
+<<fig.align='center', out.width='9.5cm'>>=
+# model randomness in RNA-seq counts.
+dge = estimateCommonDisp(dge)
+# per-gene estimates of the variance
+dge = estimateTagwiseDisp(dge)
+# examine differential expression
+results = exactTest(dge)
+
+# give the top genes sorted by p-value
+topGenes = topTags(results, n=20)
+chromosome = geneInfo[rownames(topTags(results, n=20)), 2]
+name = geneInfo[rownames(topTags(results, n=20)), 1]
+expressionTable1 = data.frame(topGenes, chromosome, name)
+@
+
+<<FullCount,results='asis'>>=
+
+print(xtable(expressionTable1[1:10, c(1,2,3,5,6)],
+             caption = "Expression table for the top 10 differentially expressed genes 
+             on the full lymphoblastoid cell dataset.", 
+             display = c("s","f","f","e","s","s"), digits = 4))
+@
+
+<<fig.align='center', out.width='10cm'>>=
+# Find top expressed genes to plot in a heatmap
+topGeneNames = rownames(topTags(results, n=15))
+logDGE = cpm(dge, prior.count=2, log=TRUE)
+topGenesLogExpression = logDGE[topGeneNames,]
+geneNames = expressionTable1[rownames(topGenesLogExpression),6]
+row.names(topGenesLogExpression) = geneNames
+
+# Removing heteroscedascity from count data
+groupMatrix <- model.matrix(~isMale)
+v = voom(dge, groupMatrix, plot=FALSE)
+@
+
+<<fig.align='center', out.width='10cm'>>=
+# Construct a Heatmap of most differentially expressed genes
+ann_col = list(Groups = c("Female","Female","Female","Female","Female","Female",
+                          "Female","Female","Female","Female","Female","Female",
+                          "Female","Female","Female","Male","Male","Male","Male",
+                          "Male","Male","Male","Male","Male","Male","Male", "Male",
+                          "Male","Male","Male"))
+aheatmap(v$E[topGeneNames,], annCol = ann_col, width = 16, 
+         labRow = geneNames)
+
+@
+\begin{center}
+Figure 2 Heatmap of gene expression for the top 15 differentially expressed genes (determined by P-value) on the full lymphoblastoid cell dataset. 
+\end{center}
+<<fig.align='center', out.width='9.5cm'>>=
+# plot a histogram of uncorrected p-values
+hist(results$table$PValue, breaks=150, xlab = "P-values",
+     main = "Gene Frequency vs. Uncorrected p-values")
+@
+\begin{center}
+Figure 3 Histogram of uncorrected P-values on the full lymphoblastoid cell dataset. 
+\end{center}
+\subsection*{a)}
+<<>>=
+# Task 1: a)
+# count number of uncorrected significant genes
+numSigGenes = sum(results$table$PValue < 0.05)
+numSigGenes
+propSigGenes = numSigGenes / dim(countsFiltered)[1]
+propSigGenes = round(propSigGenes, digits = 4)
+propSigGenes
+@
+Using the full dataset, \Sexpr{numSigGenes} genes were found to have uncorrected P-values below 0.05. Of all the genes tested, this proportion was \Sexpr{propSigGenes}.
+\subsection*{b)}
+<<fig.align='center', out.width='9.5cm'>>=
+# Task 1: b)
+# create a histogram on B-H adjusted p-values
+qValues = p.adjust(results$table$PValue, method="BH")
+hist(qValues, breaks=100, ylim=c(0,500), xlab = "B-H Corrected P-values",
+     main = "Gene Frequency vs. B-H Corrected p-values")
+@
+\begin{center}
+Figure 4 Histogram of Benjamini-Hochberg corrected P-values on the full lymphoblastoid cell dataset. 
+\end{center}
+<<>>=
+# count number of B-H corrected significant genes
+numBHSigGenes = sum(qValues < 0.05)
+numBHSigGenes
+propBHSigGenes = numBHSigGenes / dim(countsFiltered)[1]
+propBHSigGenes = round(propBHSigGenes, digits = 4)
+propBHSigGenes
+@
+Using the full dataset, \Sexpr{numBHSigGenes} genes were found to have Benjamini-Hochberg corrected P-values below 0.05. Of all the genes tested, this proportion was \Sexpr{propBHSigGenes}.
+\subsection*{c)}
+<<>>=
+# Task 1: c)
+# find significant genes on the Y chromsome
+numYGenes = sum(geneInfo[, 2] == "Y")
+numYGenes
+Y = geneInfo$chromosome_name=="Y"
+YGeneNames = rownames(geneInfo)[Y]
+
+qValues = p.adjust(results$table$PValue, method="BH")
+results$table = cbind(results$table, qValues)
+colnames(results$table) = c("logFC", "logCPM", "PValue", "QValue")
+YGeneResults = results$table[YGeneNames, ]
+YSigGeneResults = YGeneResults[which(YGeneResults$QValue < 0.05), ]
+
+numYBHSigGenes = nrow(YSigGeneResults)
+numYBHSigGenes
+propYBHSigGenes = numYBHSigGenes / numYGenes
+propYBHSigGenes = round(propYBHSigGenes, digits = 4)
+propYBHSigGenes
+@
+Using the full dataset, \Sexpr{numYBHSigGenes} Y chromosome genes were found to have Benjamini-Hochberg corrected P-values below 0.05. Of all the Y chromosome genes tested, this proportion was \Sexpr{propYBHSigGenes}.
+\subsection*{d)}
+<<>>=
+# Task 1: d)
+# find the logFC for the XIST gene
+XIST = geneInfo$gene_name=="XIST"
+rownameXIST = rownames(geneInfo)[XIST]
+logFC_XIST = round(results[rownameXIST,]$table$logFC, digits = 4)
+logFC_XIST
+@
+Using the full dataset, the log fold-change for the gene XIST is: \Sexpr{logFC_XIST}
+\section*{Task 2: DGE Analysis on Subsampled Dataset}
+The following R code performs Differential Gene Expression (DGE) analysis on the subsampled (low coverage) dataset.
+<<fig.align='center', out.width='9.25cm'>>=
+# Task 2:
+
+# Load the count data and check size
+subCountData = read.table("subsample.tsv", header=TRUE, sep="\t")
+dim(subCountData)
+
+# remove genes with very low count profiles
+lowCounts = apply(subCountData[,1:15], 1, median)==0 & 
+  apply(subCountData[,16:30], 1 ,median)==0
+countsFiltered = subCountData[!lowCounts,]
+
+# sanity check the filtering worked
+dim(countsFiltered)[1] < dim(fullCountData)[1]
+dim(countsFiltered)
+
+# separate count data from extra data
+expressionData = countsFiltered[,1:30]
+geneInfo = countsFiltered[,31:34]
+
+# Tell edgeR about Male and Female groups
+isMale = c( rep(0,15), rep(1,15) )
+# prepare data for edgeR to use, comparison between males and females
+dge = DGEList(expressionData, group=isMale)
+# perform TMM (trimmed mean) normalisation
+# assumption that most genes are not differentially expressed
+dge = calcNormFactors(dge)
+
+cols = c(rep("red",15), rep("blue",15))
+plotMDS(dge, col=cols, main = "MDS plot of subsampled lymphoblastoid cell data")
+@
+\begin{center}
+Figure 5 MDS Plot on the subsampled lymphoblastoid cell dataset. 
+\end{center}
+<<fig.align='center', out.width='9.5cm'>>=
+# model randomness in RNA-seq counts.
+dge = estimateCommonDisp(dge)
+# per-gene estimates of the variance
+dge = estimateTagwiseDisp(dge)
+# examine differential expression
+results = exactTest(dge)
+
+# give the top genes sorted by p-value
+topGenes = topTags(results, n=20)
+chromosome = geneInfo[rownames(topTags(results, n=20)), 2]
+name = geneInfo[rownames(topTags(results, n=20)), 1]
+expressionTable2 = data.frame(topGenes, chromosome, name)
+@
+
+<<Subsampled,results='asis'>>=
+
+print(xtable(expressionTable2[1:10, c(1,2,3,5,6)],
+             caption = "Expression table for the top 10 differentially expressed genes 
+             on the subsampled lymphoblastoid cell dataset.", 
+             display = c("s","f","f","e","s","s"), digits = 4))
+@
+
+<<fig.align='center', out.width='10cm'>>=
+# Find top expressed genes to plot in a heatmap
+topGeneNames = rownames(topTags(results, n=15))
+logDGE = cpm(dge, prior.count=2, log=TRUE)
+topGenesLogExpression = logDGE[topGeneNames,]
+geneNames = expressionTable2[rownames(topGenesLogExpression),6]
+row.names(topGenesLogExpression) = geneNames
+
+# Removing heteroscedascity from count data
+groupMatrix <- model.matrix(~isMale)
+v = voom(dge, groupMatrix, plot=FALSE)
+@
+
+<<fig.align='center', out.width='10cm'>>=
+# Construct a Heatmap of most differentially expressed genes
+aheatmap(v$E[topGeneNames,], annCol = ann_col, width = 16, 
+         labRow = geneNames)
+
+@
+\begin{center}
+Figure 6 Heatmap of gene expression for the top 15 differentially expressed genes (determined by P-value) on the subsampled lymphoblastoid cell dataset
+\end{center}
+<<fig.align='center', out.width='9.5cm'>>=
+# plot a histogram of uncorrected p-values
+hist(results$table$PValue, breaks=150, xlab = "P-values",
+     main = "Gene Frequency vs. Uncorrected p-values")
+@
+\begin{center}
+Figure 7 Histogram of uncorrected P-values on the subsampled lymphoblastoid cell dataset. 
+\end{center}
+\subsection*{a)}
+<<>>=
+# Task 2: a)
+# count number of uncorrected significant genes
+numSigGenes = sum(results$table$PValue < 0.05)
+numSigGenes
+propSigGenes = numSigGenes / dim(countsFiltered)[1]
+propSigGenes = round(propSigGenes, digits = 4)
+propSigGenes
+
+@
+Using the subsampled (low coverage) dataset, \Sexpr{numSigGenes} genes were found to have uncorrected P-values below 0.05. Of all the genes tested, this proportion was \Sexpr{propSigGenes}.
+\subsection*{b)}
+<<fig.align='center', out.width='9.5cm'>>=
+# Task 2: b)
+# create a histogram on B-H adjusted p-values
+qValues = p.adjust(results$table$PValue, method="BH")
+hist(qValues, breaks=100, ylim=c(0,500), xlab = "B-H Corrected P-values",
+     main = "Gene Frequency vs. B-H Corrected p-values")
+@
+\begin{center}
+Figure 8 Histogram of Benjamini-Hochberg corrected P-values on the subsampled lymphoblastoid cell dataset. 
+\end{center}
+<<>>=
+# count number of B-H corrected significant genes
+numBHSigGenes = sum(qValues < 0.05)
+numBHSigGenes
+propBHSigGenes = numBHSigGenes / dim(countsFiltered)[1]
+propBHSigGenes = round(propBHSigGenes, digits = 4)
+propBHSigGenes
+@
+Using the subsampled (low coverage) dataset, \Sexpr{numBHSigGenes} genes were found to have Benjamini-Hochberg corrected P-values below 0.05. Of all the genes tested, this proportion was \Sexpr{propBHSigGenes}.
+\subsection*{c)}
+<<>>=
+# Task 2: c)
+# find significant genes on the Y chromsome
+numYGenes = sum(geneInfo[, 2] == "Y")
+numYGenes
+Y = geneInfo$chromosome_name=="Y"
+YGeneNames = rownames(geneInfo)[Y]
+
+qValues = p.adjust(results$table$PValue, method="BH")
+results$table = cbind(results$table, qValues)
+colnames(results$table) = c("logFC", "logCPM", "PValue", "QValue")
+YGeneResults = results$table[YGeneNames, ]
+YSigGeneResults = YGeneResults[which(YGeneResults$QValue < 0.05), ]
+
+numYBHSigGenes = nrow(YSigGeneResults)
+numYBHSigGenes
+propYBHSigGenes = numYBHSigGenes / numYGenes
+propYBHSigGenes = round(propYBHSigGenes, digits = 4)
+propYBHSigGenes
+@
+Using the subsampled (low coverage) dataset, \Sexpr{numYBHSigGenes} Y chromosome genes were found to have Benjamini-Hochberg corrected P-values below 0.05. Of all the Y chromosome genes tested, this proportion was \Sexpr{propYBHSigGenes}.
+\subsection*{d)}
+<<>>=
+# Task 2: d)
+# find the logFC for the XIST gene
+XIST = geneInfo$gene_name=="XIST"
+rownameXIST = rownames(geneInfo)[XIST]
+logFC_XIST = round(results[rownameXIST,]$table$logFC, digits = 4)
+logFC_XIST
+@
+Using the subsampled dataset (lower coverage), the log fold-change for the gene XIST is: \Sexpr{logFC_XIST}
+\section*{Task 3: DGE Analysis on Subsampled, Randomised Dataset}
+The following R code performs Differential Gene Expression (DGE) analysis on the subsampled (low coverage) dataset with randomised sample groups. Note that since the sample groups were randomised, the reported gene numbers, P-values and log Fold-Change from the subsections can change between sampling runs.
+<<fig.align='center', out.width='9.25cm'>>=
+# Task 3:
+
+# group split for the randomised DGE analysis
+# randomgroup is the vector used to assign samples to groups
+randomgroup = sample(c(0,1), 30, replace=TRUE)
+randomgroup
+
+# Load the count data and check size
+subCountData = read.table("subsample.tsv", header=TRUE, sep="\t")
+dim(subCountData)
+
+# remove genes with very low count profiles
+lowCounts = apply(subCountData[,1:15], 1, median)==0 & 
+  apply(subCountData[,16:30], 1 ,median)==0
+countsFiltered = subCountData[!lowCounts,]
+
+# sanity check the filtering worked
+dim(countsFiltered)[1] < dim(fullCountData)[1]
+dim(countsFiltered)
+
+# separate count data from extra data
+expressionData = countsFiltered[,1:30]
+geneInfo = countsFiltered[,31:34]
+
+# prepare data for edgeR to use, comparison between males and females
+dge = DGEList(expressionData, group=randomgroup)
+# perform TMM (trimmed mean) normalisation
+# assumption that most genes are not differentially expressed
+dge = calcNormFactors(dge)
+
+cols = rep("", 30) 
+for (i in seq(1,30,1)){
+  if (randomgroup[i] == 0)
+    cols[i] = "red"
+  else
+    cols[i] = "blue"
+}
+plotMDS(dge, col=cols, main = "MDS plot of randomised, subsampled lymphoblastoid cell data")
+@
+\begin{center}
+Figure 9 MDS Plot on the subsampled, randomised lymphoblastoid cell dataset. 
+\end{center}
+<<fig.align='center', out.width='9.5cm'>>=
+# model randomness in RNA-seq counts.
+dge = estimateCommonDisp(dge)
+# per-gene estimates of the variance
+dge = estimateTagwiseDisp(dge)
+# examine differential expression
+results = exactTest(dge)
+
+# give the top genes sorted by p-value
+topGenes = topTags(results, n=20)
+chromosome = geneInfo[rownames(topTags(results, n=20)), 2]
+name = geneInfo[rownames(topTags(results, n=20)), 1]
+expressionTable3 = data.frame(topGenes, chromosome, name)
+@
+
+<<Subsampled_Randomised,results='asis'>>=
+
+print(xtable(expressionTable3[1:10, c(1,2,3,5,6)],
+             caption = "Expression table for the top 10 differentially expressed genes 
+             on the subsampled, randomised lymphoblastoid cell dataset.", 
+             display = c("s","f","f","e","s","s"), digits = 4))
+@
+
+<<fig.align='center', out.width='10cm'>>=
+# Find top expressed genes to plot in a heatmap
+topGeneNames = rownames(topTags(results, n=15))
+logDGE = cpm(dge, prior.count=2, log=TRUE)
+topGenesLogExpression = logDGE[topGeneNames,]
+geneNames = expressionTable3[rownames(topGenesLogExpression),6]
+row.names(topGenesLogExpression) = geneNames
+
+# Remove heteroscedascity from count data
+groupMatrix <- model.matrix(~randomgroup)
+v = voom(dge, groupMatrix, plot=FALSE)
+@
+
+<<fig.align='center', out.width='10cm'>>=
+# Construct a Heatmap of most differentially expressed genes
+aheatmap(v$E[topGeneNames,], annCol = ann_col, width = 16, 
+         labRow = geneNames)
+@
+\begin{center}
+Figure 10 Heatmap of gene expression for the top 15 differentially expressed genes (determined by P-value) on the subsampled, randomised lymphoblastoid cell dataset
+\end{center}
+<<fig.align='center', out.width='9.5cm'>>=
+# plot a histogram of uncorrected p-values
+hist(results$table$PValue, breaks=150, xlab = "P-values",
+     main = "Gene Frequency vs. Uncorrected p-values")
+@
+\begin{center}
+Figure 11 Histogram of uncorrected P-values on the subsampled, randomised lymphoblastoid cell dataset. 
+\end{center}
+\subsection*{a)}
+<<>>=
+# Task 3: a)
+# count number of uncorrected significant genes
+numSigGenes = sum(results$table$PValue < 0.05)
+numSigGenes
+propSigGenes = numSigGenes / dim(countsFiltered)[1]
+propSigGenes = round(propSigGenes, digits = 4)
+propSigGenes
+@
+Using the subsampled (low coverage) dataset with randomised sample groups, \Sexpr{numSigGenes} genes were found to have uncorrected P-values below 0.05. Of all the genes tested, this proportion was \Sexpr{propSigGenes}.
+\subsection*{b)}
+<<fig.align='center', out.width='9.5cm'>>=
+# Task 3: b)
+# create a histogram on B-H adjusted p-values
+qValues = p.adjust(results$table$PValue, method="BH")
+hist(qValues, breaks=100, ylim=c(0,100), xlab = "B-H Corrected P-values",
+     main = "Gene Frequency vs. B-H Corrected p-values")
+@
+\begin{center}
+Figure 12 Histogram of Benjamini-Hochberg corrected P-values on the subsampled, randomised lymphoblastoid cell dataset. 
+\end{center}
+<<>>=
+# count number of B-H corrected significant genes
+numBHSigGenes = sum(qValues < 0.05)
+numBHSigGenes
+propBHSigGenes = numBHSigGenes / dim(countsFiltered)[1]
+propBHSigGenes = round(propBHSigGenes, digits = 4)
+propBHSigGenes
+@
+Using the subsampled (low coverage) dataset with randomised sample groups, \Sexpr{numBHSigGenes} genes were found to have Benjamini-Hochberg corrected P-values below 0.05. Of all the genes tested, this proportion was \Sexpr{propBHSigGenes}.
+\subsection*{c)}
+<<>>=
+# Task 3: c)
+# find significant genes on the Y chromsome
+numYGenes = sum(geneInfo[, 2] == "Y")
+numYGenes
+Y = geneInfo$chromosome_name=="Y"
+YGeneNames = rownames(geneInfo)[Y]
+YGeneResults = results[YGeneNames, ]
+
+YQValues = p.adjust(YGeneResults$table$PValue, method="BH")
+numYBHSigGenes = sum(YQValues < 0.05)
+numYBHSigGenes
+propYBHSigGenes = numYBHSigGenes / numYGenes
+propYBHSigGenes = round(propYBHSigGenes, digits = 4)
+propYBHSigGenes
+@
+Using the subsampled (low coverage) dataset with randomised sample groups, \Sexpr{numYBHSigGenes} Y chromosome genes were found to have Benjamini-Hochberg corrected P-values below 0.05. Of all the Y chromosome genes tested, this proportion was \Sexpr{propYBHSigGenes}.
+\subsection*{d)}
+<<>>=
+# Task 3: d)
+# find the logFC for the XIST gene
+XIST = geneInfo$gene_name=="XIST"
+rownameXIST = rownames(geneInfo)[XIST]
+logFC_XIST = round(results[rownameXIST,]$table$logFC, digits = 4)
+logFC_XIST
+@
+Using the subsampled dataset (lower coverage) with randomised sample groups, the log fold-change for the gene XIST is: \Sexpr{logFC_XIST}
+\section*{Task 4: Differential Gene Expression Discussion}
+To ensure proper comparison between the full (task 1) and subsampled (task 2) datasets and the subsampled (task 2) and subsampled, randomised (task 3) datasets, the same preprocessing and filtering methods were applied before differential gene expression analysis was undertaken. The standard preprocessing of RNA-seq data was performed: filtering low count genes and performing trimmed mean normalisation. The datasets were also adjusted for heteroscedasity, as often with RNA-seq data, the variance of counts is mean-dependent$^1$.
+\subsection*{a) The Full and Subsampled Datasets}
+Beginning with an analysis of the full and subsampled count datasets, the MDS plots are important to visualise how the male and female groups cluster. 
+Comparing, figures 1 and 5 both groups are linearly separable by the first two dimensions alone. However, figure 5 does show some overlap between the male and female groups. This is expected with lower count RNA-seq data as we have less power to separate groups. In both figures 1 and 5, the replicate $'F00102\_F'$ doesn't cluster well with the female group and is likely a poor sample that could be safely removed.\\
+Looking at tables 1 and 2, both analyses produced the same genes as significant, most of which were from chromosome Y. This was expected, since the groups, in both analyses, were split by sex, the most differentially expressed genes are on the X and Y chromosomes. The XIST gene is the only gene not from the Y chromosome that was significantly expressed in both analyses. Since this gene is only transcribed in the presence of multiple X chromosomes to inactivate the other X chromosome. With this, XIST is the only significant gene with a negative logFC as it is not expressed in the male group but is highly expressed in the female group (1d and 2d). Characteristic of lower read depth, the logFC in the subsampled dataset genes is mostly lower than the full count dataset. 
+\\
+
+Comparing the results from 1c and 2c, the proportion of significant differentially Y genes (after multiple testing correction) has decreased. Whilst these genes should still be differentially expressed between the sexes, the decrease in counts has led to a decrease in number of genes with which the statistical tests can confidently claim differential expression. Moreover, there is a decrease in significant differentially expressed genes -after multiple testing- in general (results 1b and 2b). It is known that increasing the read depth increases the number of false positive genes reported$^2$ and so performing a subsampled analysis on the same group data can control for false positives. 
+This is a particularly good remedy for false positive genes that were not detected by Benjamini-Hochberg (B-H) multiple testing correction.
+\subsection*{b) The Subsampled and Subsampled, Randomised Datasets}
+Beginning again with an inspection of the MDS plots for the subssampled (task 2) and subsampled, randomised (task 3) datasets figures 5 and 9 are drastically different. As before, figure 5 shows a clear linear separability in the first two dimensions, where figure 9 displays complete group overlap, (and likely would not be separable if higher dimensions were included). Leading from this, the analysis from task 3 acts as a negative control.\\
+To gain confidence in the differentially expressed genes reported in table 2 it is important that they also don't arise in table 3 with the same logFC. Table 3 indicates that there are no genes reported on either chromosome X or Y and so there is no overlap between table 2. Further, the logFC values for these genes in table 3 is significantly lower than it is in tables 1 and 2. This indicates that these genes reported may not actually be differentially expressed. To analyse this further, 3b and 3c report on the significant genes and Y chromosome genes after B-H correction. \Sexpr{numBHSigGenes} genes are found to be significant in 3b compared to 37 in 2b and from 3c no Y genes were significantly differentially expressed between groups compared to 16 in 2c. This is desirable from a negative control and is a result of male replicates in both groups decided by the \textit{\lq randomgroup'} vector. Figures 2, 6 and 10 are heatmaps for tasks 1, 2 and 3 respectively. Unlike figures 2 and 6, figure 10 has lost the \lq hot/cold' symmetry between groups and hierarchically clusters between group replicates before clustering within group replicates. Similarly to the expression of Y genes the XIST gene logFC has decreased substantially between 2d and 3d as a result of splitting female replicates between groups.  
+
+\subsection*{Conclusion}
+In sum, using a subsampled analysis alongside full and subsampled, randomised analyses we can successfully remove more false positives, missed by multiple testing correction and add a negative control. The combination of these three approaches creates a more robust analysis where there is a higher confidence that the differentially expressed genes reported in tasks 1 and 2, but not task 3, are truly differentially expressed.
+\section*{References}
+1. Law CW., Chen Y., Shi W., et al. Voom: Precision Weights Unlock Linear Model Analysis Tools for RNA-seq Read Counts. Genome Biology, 15(2), R29, (2014).\\
+2. Tarazona S., Garcia-Alcalde F., Dopazo J., et al. Differential Expression in RNA-seq: A matter of Depth. Genome Research, 21(12): 2213-2223, (2011).
+<<>>=
+sessionInfo()
+@
+\end{document}
